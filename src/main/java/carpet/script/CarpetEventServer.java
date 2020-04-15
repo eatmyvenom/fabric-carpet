@@ -12,6 +12,7 @@ import carpet.script.value.StringValue;
 import carpet.script.value.Value;
 import carpet.utils.Messenger;
 import net.minecraft.block.BlockState;
+import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -176,7 +177,7 @@ public class CarpetEventServer
 
         public void removeAllCalls(String hostName)
         {
-            callList.removeIf((c)-> c.host.equals(hostName));
+            callList.removeIf((c)-> c.host != null && c.host.equals(hostName));
         }
     }
 
@@ -479,6 +480,53 @@ public class CarpetEventServer
                 handler.call( () -> Collections.singletonList(((c, t) -> new EntityValue(player))), player::getCommandSource);
             }
         },
+        PLAYER_TAKES_DAMAGE("player_takes_damage", 4, false)
+        {
+            @Override
+            public void onDamage(Entity target, float amount, DamageSource source)
+            {
+                handler.call( () ->
+                {
+                    return Arrays.asList(
+                            ((c, t) -> new EntityValue(target)),
+                            ((c, t) -> new NumericValue(amount)),
+                            ((c, t) ->new StringValue(source.getName())),
+                            ((c, t) -> source.getAttacker()==null?Value.NULL:new EntityValue(source.getAttacker()))
+                    );
+                }, target::getCommandSource);
+            }
+        },
+        PLAYER_DEALS_DAMAGE("player_deals_damage", 3, false)
+        {
+            @Override
+            public void onDamage(Entity target, float amount, DamageSource source)
+            {
+                handler.call( () ->
+                {
+                    return Arrays.asList(
+                            ((c, t) -> new EntityValue(source.getAttacker())),
+                            ((c, t) -> new NumericValue(amount)),
+                            ((c, t) -> new EntityValue(target))
+                    );
+                }, () -> source.getAttacker().getCommandSource());
+            }
+        },
+        PLAYER_DIES("player_dies", 1, false)
+        {
+            @Override
+            public void onPlayerEvent(ServerPlayerEntity player)
+            {
+                handler.call( () -> Collections.singletonList(((c, t) -> new EntityValue(player))), player::getCommandSource);
+            }
+        },
+        PLAYER_RESPAWNS("player_respawns", 1, false)
+        {
+            @Override
+            public void onPlayerEvent(ServerPlayerEntity player)
+            {
+                handler.call( () -> Collections.singletonList(((c, t) -> new EntityValue(player))), player::getCommandSource);
+            }
+        },
         STATISTICS("statistic", 4, false)
         {
             private <T> Identifier getStatId(Stat<T> stat)
@@ -502,7 +550,20 @@ public class CarpetEventServer
                         ((c, t) -> new NumericValue(amount))
                 ), player::getCommandSource);
             }
-        }
+        },
+        LIGHTNING("lightning", 2, true)
+        {
+            @Override
+            public void onWorldEventFlag(ServerWorld world, BlockPos pos, int flag)
+            {
+                handler.call(
+                        () -> Arrays.asList(
+                                ((c, t) -> new BlockValue(null, world, pos)),
+                                ((c, t) -> flag>0?Value.TRUE:Value.FALSE)
+                        ), () -> CarpetServer.minecraft_server.getCommandSource().withWorld(world)
+                );
+            }
+        },
         ;
 
         // on projectile thrown (arrow from bows, crossbows, tridents, snoballs, e-pearls
@@ -538,6 +599,10 @@ public class CarpetEventServer
         public void onBlockBroken(ServerPlayerEntity player, BlockPos pos, BlockState previousBS) { }
         public void onBlockPlaced(ServerPlayerEntity player, BlockPos pos, Hand enumhand, ItemStack itemstack) { }
         public void onEntityAction(ServerPlayerEntity player, Entity entity, Hand enumhand) { }
+        public void onDamage(Entity target, float amount, DamageSource source) { }
+
+        public void onWorldEvent(ServerWorld world, BlockPos pos) { }
+        public void onWorldEventFlag(ServerWorld world, BlockPos pos, int flag) { }
     }
 
 

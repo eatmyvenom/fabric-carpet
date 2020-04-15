@@ -246,12 +246,18 @@ public class PlayerCommand
         }
         catch (CommandSyntaxException ignored) {}
         String playerName = StringArgumentType.getString(context, "player");
+        if (playerName.length()>40)
+        {
+            Messenger.m(context.getSource(), "rb Player name: "+playerName+" is too long");
+            return 0;
+        }
         MinecraftServer server = source.getMinecraftServer();
         PlayerEntity player = EntityPlayerMPFake.createFake(playerName, server, pos.x, pos.y, pos.z, facing.y, facing.x, dim, mode);
         if (player == null)
         {
             Messenger.m(context.getSource(), "rb Player " + StringArgumentType.getString(context, "player") + " doesn't exist " +
                     "and cannot spawn in online mode. Turn the server offline to spawn non-existing players");
+            return 0;
         }
         return 1;
     }
@@ -290,6 +296,14 @@ public class PlayerCommand
             Messenger.m(context.getSource(), "r Cannot shadow fake players");
             return 0;
         }
+        ServerPlayerEntity sendingPlayer = null;
+        try
+        {
+            sendingPlayer = context.getSource().getPlayer();
+        }
+        catch (CommandSyntaxException ignored) { }
+
+        if (sendingPlayer!=player && cantManipulate(context)) return 0;
         EntityPlayerMPFake.createShadow(player.server, player);
         return 1;
     }

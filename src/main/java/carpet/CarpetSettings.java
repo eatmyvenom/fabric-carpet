@@ -2,15 +2,14 @@ package carpet;
 
 import carpet.settings.ParsedRule;
 import carpet.settings.Rule;
+import carpet.settings.SettingsManager;
 import carpet.settings.Validator;
 import carpet.utils.Messenger;
+import carpet.utils.SpawnChunks;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.dedicated.DedicatedServer;
-import net.minecraft.server.world.ChunkTicketType;
-import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Unit;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
@@ -28,16 +27,19 @@ import static carpet.settings.RuleCategory.OPTIMIZATION;
 import static carpet.settings.RuleCategory.SURVIVAL;
 import static carpet.settings.RuleCategory.TNT;
 import static carpet.settings.RuleCategory.DISPENSER;
+import static carpet.settings.RuleCategory.SCARPET;
+import static carpet.settings.RuleCategory.CLIENT;
 
 @SuppressWarnings("CanBeFinal")
 public class CarpetSettings
 {
-    public static final String carpetVersion = "1.3.13+v200304";
+    public static final String carpetVersion = "1.3.18+v200408";
     public static final Logger LOG = LogManager.getLogger();
     public static boolean skipGenerationChecks = false;
     public static boolean impendingFillSkipUpdates = false;
     public static Box currentTelepotingEntityBox = null;
     public static Vec3d fixedPosition = null;
+    public static int runPermissionLevel = 2;
 
     @Rule(
             desc = "Nether portals correctly place entities going through",
@@ -169,7 +171,11 @@ public class CarpetSettings
 
     @Rule(
             desc = "Lag optimizations for redstone dust",
-            extra = "by Theosib",
+            extra = {
+                    "by Theosib",
+                    ".. also fixes some locational behaviours or vanilla redstone MC-11193",
+                    "so behaviour of locational vanilla contraptions is not guaranteed"
+            },
             category = {EXPERIMENTAL, OPTIMIZATION}
     )
     public static boolean fastRedstoneDust = false;
@@ -227,13 +233,6 @@ public class CarpetSettings
 
     @Rule( desc = "Pistons can push block entities, like hoppers, chests etc.", category = {EXPERIMENTAL, FEATURE} )
     public static boolean movableBlockEntities = false;
-
-    /*@Rule(
-            desc = "Orange stained glass behaves like slime, but doesn't stick to it",
-            extra = "Only available for 1.14. in 1.15 use honey instead",
-            category = {EXPERIMENTAL, FEATURE}
-    )
-    public static boolean honeySlime = false;*/
 
     @Rule( desc = "Saplings turn into dead shrubs in hot climates and no water access", category = FEATURE )
     public static boolean desertShrubs = false;
@@ -303,13 +302,36 @@ public class CarpetSettings
     @Rule(desc = "Enables /draw commands", extra = "... allows for drawing simple shapes", category = COMMAND)
     public static String commandDraw = "true";
 
-    @Rule(desc = "Enables /script command", extra = "An in-game scripting API for Scarpet programming language", category = COMMAND)
-    public static boolean commandScript = true;
+    @Rule(
+            desc = "Enables /script command",
+            extra = "An in-game scripting API for Scarpet programming language",
+            category = {COMMAND, SCARPET}
+    )
+    public static String commandScript = "true";
+
+    private static class ModulePermissionLevel extends Validator<String> {
+        @Override public String validate(ServerCommandSource source, ParsedRule<String> currentRule, String newValue, String string) {
+            CarpetSettings.runPermissionLevel = SettingsManager.getCommandLevel(newValue);
+            return newValue;
+        }
+        @Override
+        public String description() { return "Also controls permission level of commands executed via `run()`";}
+    }
+    @Rule(
+            desc = "Enables restrictions for arbitrary code execution with scarpet",
+            extra = {
+                    "Users that don't have this permission level",
+                    "won't be able to load apps or /script run"
+            },
+            category = {COMMAND, SCARPET},
+            validate = ModulePermissionLevel.class
+    )
+    public static String commandScriptACE = "ops";
 
     @Rule(
             desc = "Scarpet script from world files will autoload on server/world start ",
             extra = "if /script is enabled",
-            category = CREATIVE
+            category = SCARPET
     )
     public static boolean scriptsAutoload = false;
 
@@ -325,16 +347,17 @@ public class CarpetSettings
     @Rule(desc = "Pistons, Glass and Sponge can be broken faster with their appropriate tools", category = SURVIVAL)
     public static boolean missingTools = false;
 
-    //@Rule(desc = "Alternative, persistent caching strategy for nether portals", category = {SURVIVAL, CREATIVE})
-    //public static boolean portalCaching = false; // ineffective in 1.15
-
     @Rule(desc = "fill/clone/setblock and structure blocks cause block updates", category = CREATIVE)
     public static boolean fillUpdates = true;
 
     @Rule(desc = "placing blocks cause block updates", category = CREATIVE)
     public static boolean interactionUpdates = true;
 
-    @Rule(desc = "smooth client animations with low tps settings", extra = "works only in SP, and will slow down players", category = CREATIVE)
+    @Rule(
+            desc = "smooth client animations with low tps settings",
+            extra = "works only in SP, and will slow down players",
+            category = {CREATIVE, SURVIVAL, CLIENT}
+    )
     public static boolean smoothClientAnimations;
 
     //@Rule(
@@ -474,13 +497,9 @@ public class CarpetSettings
     )
     public static int viewDistance = 0;
 
-    private static class DisableSpawnChunksValidator extends Validator<Boolean> {
-        @Override public Boolean validate(ServerCommandSource source, ParsedRule<Boolean> currentRule, Boolean newValue, String string) {
-            if (currentRule.get().booleanValue() == newValue.booleanValue())
-            {
-                //must been some startup thing
-                return newValue;
-            }
+    public static class ChangeSpawnChunksValidator extends Validator<Integer> {
+        public static void changeSpawnSize(int size)
+        {
             ServerWorld overworld = CarpetServer.minecraft_server.getWorld(DimensionType.OVERWORLD);
             if (overworld != null) {
                 ChunkPos centerChunk = new ChunkPos(new BlockPos(
@@ -488,40 +507,37 @@ public class CarpetSettings
                         overworld.getLevelProperties().getSpawnY(),
                         overworld.getLevelProperties().getSpawnZ()
                 ));
-                ServerChunkManager chunkManager = (ServerChunkManager) overworld.getChunkManager();
-
-                chunkManager.removeTicket(ChunkTicketType.START, centerChunk, 11, Unit.INSTANCE);
-                if (!newValue)
-                {
-                    chunkManager.addTicket(ChunkTicketType.START, centerChunk, 11, Unit.INSTANCE);
-                }
+                SpawnChunks.changeSpawnChunks(overworld.getChunkManager(), centerChunk, size);
+            }
+        }
+        @Override public Integer validate(ServerCommandSource source, ParsedRule<Integer> currentRule, Integer newValue, String string) {
+            if (newValue < 0 || newValue > 32)
+            {
+                Messenger.m(source, "r spawn chunk size has to be between 0 and 32");
+                return null;
+            }
+            if (currentRule.get().intValue() == newValue.intValue())
+            {
+                //must been some startup thing
+                return newValue;
+            }
+            ServerWorld currentOverworld = CarpetServer.minecraft_server.getWorld(DimensionType.OVERWORLD);
+            if (currentOverworld != null)
+            {
+                changeSpawnSize(newValue);
             }
             return newValue;
         }
     }
     @Rule(
-            desc = "Allows spawn chunks to unload",
+            desc = "Changes size of spawn chunks",
+            extra = {"Defines new radius", "setting it to 0 - disables spawn chunks"},
             category = CREATIVE,
-            validate = DisableSpawnChunksValidator.class
-    )
-    public static boolean disableSpawnChunks = false;
-
-    /*private static class KelpLimit extends Validator<Integer>
-    {
-        @Override public Integer validate(ServerCommandSource source, ParsedRule<Integer> currentRule, Integer newValue, String string) {
-            return (newValue>=0 && newValue <=25)?newValue:null;
-        }
-        @Override
-        public String description() { return "You must choose a value from 0 to 25. 25 and all natural kelp can grow 25 blocks, choose 0 to make all generated kelp not to grow";}
-    }
-    @Rule(
-            desc = "limits growth limit of newly naturally generated kelp to this amount of blocks",
-            options = {"0", "2", "25"},
-            category = FEATURE,
             strict = false,
-            validate = KelpLimit.class
+            options = {"0", "11"},
+            validate = ChangeSpawnChunksValidator.class
     )
-    public static int kelpGenerationGrowthLimit = 25;*/
+    public static int spawnChunksSize = 11;
 
     @Rule(desc = "Coral structures will grow with bonemeal from coral plants", category = FEATURE)
     public static boolean renewableCoral = false;
@@ -538,13 +554,6 @@ public class CarpetSettings
 
     @Rule(desc = "Spawning requires much less CPU and Memory", category = OPTIMIZATION)
     public static boolean lagFreeSpawning = false;
-
-    //@Rule(
-    //        desc = "Prevents horses and other mobs to wander into the distance after dismounting",
-    //        extra = "Fixes issues with various Joergens wandering off and disappearing client-side",
-    //        category = BUGFIX
-    //)
-    //public static boolean horseWanderingFix = false;
     
     @Rule(
             desc = "Allows structure mobs to spawn in flat worlds",
